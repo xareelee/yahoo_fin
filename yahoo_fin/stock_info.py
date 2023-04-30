@@ -5,6 +5,7 @@ import io
 import re
 import json
 import datetime
+from lxml import html
 
 try:
     from requests_html import HTMLSession
@@ -324,46 +325,49 @@ def get_stats(ticker, headers = {'User-agent': 'Mozilla/5.0'}):
     '''
 
     stats_site = "https://finance.yahoo.com/quote/" + ticker + \
-                 "/key-statistics?p=" + ticker
+                    "/key-statistics?p=" + ticker
+
+    resp = requests.get(stats_site, headers=headers).text
+
+    def clean_html(raw_html):
+        # remove the `<sup>` tags before parsing
+        tree = html.fromstring(raw_html)
+        for sup in tree.xpath('//sup'):
+            sup.getparent().remove(sup)
+        return html.tostring(tree)
+
+    tables = pd.read_html(clean_html(resp))
+
+    table_names = {
+        # First row of each table => the column names
+        "Market Cap (intraday)":        "Valuation Measures",
+        "Beta (5Y Monthly)":            "Stock Price History",
+        "Avg Vol (3 month)":            "Share Statistics",
+        "Forward Annual Dividend Rate": "Dividends & Splits",
+        "Fiscal Year Ends":             "Fiscal Year",
+        "Profit Margin":                "Profitability",
+        "Return on Assets (ttm)":       "Management Effectiveness",
+        "Revenue (ttm)":                "Income Statement",
+        "Total Cash (mrq)":             "Balance Sheet",
+        "Operating Cash Flow (ttm)":    "Cash Flow Statement",
+    }
 
 
-    tables = pd.read_html(requests.get(stats_site, headers=headers).text)
+    assert len(tables) == len(table_names), "The length of table_names and tables are not equal."
 
-    tables = [table for table in tables[1:] if table.shape[1] == 2]
+    whole_table = pd.DataFrame()
+    for table in tables:
+        table.columns = ["Attribute" , "Value"]
+        # Find and set the section name by first attribute name
+        first_attr = table.iloc[0]["Attribute"]
+        section_name = table_names[first_attr]
+        table.insert(0, 'Section', section_name)
+        # Concatenate all tables
+        whole_table = pd.concat([whole_table, table])
 
-    table = tables[0]
-    for elt in tables[1:]:
-        table = pd.concat([table, elt])
+    whole_table = whole_table.reset_index(drop=True)
 
-    table.columns = ["Attribute" , "Value"]
-
-    table = table.reset_index(drop = True)
-
-    return table
-
-
-def get_stats_valuation(ticker, headers = {'User-agent': 'Mozilla/5.0'}):
-
-    '''Scrapes Valuation Measures table from the statistics tab on Yahoo Finance
-       for an input ticker
-
-       @param: ticker
-    '''
-
-    stats_site = "https://finance.yahoo.com/quote/" + ticker + \
-                 "/key-statistics?p=" + ticker
-
-
-    tables = pd.read_html(requests.get(stats_site, headers=headers).text)
-
-    tables = [table for table in tables if "Trailing P/E" in table.iloc[:,0].tolist()]
-
-
-    table = tables[0].reset_index(drop = True)
-
-    return table
-
-
+    return whole_table
 
 
 
